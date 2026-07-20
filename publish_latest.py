@@ -167,7 +167,13 @@ def apply_retention_policy(reference_date: date = None):
 
 
 def build_archive_index():
-    """archive/ 配下の日付一覧を新しい順に並べた、閲覧用の一覧ページを作る。"""
+    """
+    archive/ 配下の日付一覧を新しい順に並べ、閲覧用のHTML一覧ページと、
+    SectorRotationAndroidアプリ(履歴タブ)が読み込むためのindex.jsonの
+    両方を作る。片方だけ更新して他方が古いまま、という食い違いを避けるため、
+    日付一覧の取得(os.listdir + フィルタ + ソート)は1回だけ行い、
+    HTML/JSONどちらもそこから生成する。
+    """
     if not os.path.isdir(ARCHIVE_DIR):
         return
 
@@ -182,6 +188,10 @@ def build_archive_index():
             continue
         dates.append(name)
     dates.sort(reverse=True)
+
+    index_json = {"dates": dates}
+    with open(os.path.join(ARCHIVE_DIR, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(index_json, f, ensure_ascii=False, indent=2)
 
     rows = "\n".join(f'<li><a href="{d}/dashboard.png">{d}</a></li>' for d in dates)
     html = f"""<!doctype html>
@@ -207,7 +217,10 @@ ul {{ line-height: 1.9; }}
     with open(os.path.join(ARCHIVE_DIR, "index.html"), "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"[完了] アーカイブ一覧ページを作成しました ({len(dates)}件): {ARCHIVE_DIR}/index.html")
+    print(
+        f"[完了] アーカイブ一覧を作成しました ({len(dates)}件): "
+        f"{ARCHIVE_DIR}/index.html (閲覧用), {ARCHIVE_DIR}/index.json (アプリ用)"
+    )
 
 
 def copy_archive_into_public():
