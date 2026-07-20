@@ -300,7 +300,14 @@ def render_chart(df: pd.DataFrame, tail_days: int, stamp: str, filename: str, is
     subtitle = f"直近{tail_days}営業日の軌跡。左上(Improving)は勢いが好転し始めた局面(統計的な優位性は未確認)。"
     if is_sub:
         subtitle += " (参考用サブ表示。通常はメインの10営業日版を見てください)"
-    ax.set_title(subtitle, fontsize=12, loc="left", pad=12)
+    # 長文だとax.set_title()は折り返さず1行のまま図の外にはみ出し、
+    # bbox_inches="tight"で保存時に画像全体の横幅が下の図より広がってしまう
+    # (banner同様、下の図の横幅に合わせて折り返す)。
+    # max_widthはbanner本文(fontsize=9.2)で使う148とは別値: この見出しは
+    # fontsize=12と文字が大きい分、同じ物理幅に収まる文字数は少なくなるため、
+    # フォントサイズ比でスケールした値を使う(148 * 9.2/12 ≈ 113)。
+    subtitle_wrapped = "\n".join(_wrap_cjk(subtitle, max_width=113))
+    ax.set_title(subtitle_wrapped, fontsize=12, loc="left", pad=12)
     fig.text(
         0.0, -0.015,
         "X軸 RS-Ratio: RSP比の63日移動平均に対する「今の強さ」(100が基準、右ほど強い) / "
