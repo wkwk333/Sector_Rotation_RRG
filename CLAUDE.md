@@ -37,7 +37,8 @@ py -3.11 -m venv venv
 .\venv\Scripts\python.exe rrg_monitor.py             # 1. fetch prices, compute RS-Ratio/RS-Momentum + momentum ranking -> output/*.csv
 .\venv\Scripts\python.exe plot_rrg.py                # 2a. render the RRG comet chart -> output/rrg_chart_*.png (+ sub 20d version)
 .\venv\Scripts\python.exe plot_momentum_ranking.py   # 2b. render the 12-month momentum leaderboard -> output/momentum_ranking_chart_*.png
-.\venv\Scripts\python.exe backtest_rrg.py            # optional: re-run the informal backtest (daily + weekly variants, ~5 min, hits network for 8y of data)
+.\venv\Scripts\python.exe backtest_rrg.py               # optional: re-run RRG's informal backtest (daily + weekly variants, ~5 min, hits network for 8y of data)
+.\venv\Scripts\python.exe backtest_momentum_ranking.py  # optional: simulate the top-N/monthly-rebalance rule -> output/momentum_backtest_results_*.csv
 ```
 
 No test suite, no lint command.
@@ -242,12 +243,43 @@ within days of each other), so the effective independent sample size is smaller 
 the row count suggests. Don't over-read the null any more than the original "Improving"
 claim should have been over-read — both are weakly-powered reads of ~1 market cycle.
 
+## Phase B closing check: does the momentum ranking actually work on *this* universe?
+
+Everything backing `plot_momentum_ranking.py` up to this point was someone else's
+research on a different (broader, longer-history) universe — Moskowitz & Grinblatt
+and Quantpedia's replication used the whole stock market / a 1928-2009 sample, not
+specifically these 11 Sector SPDRs over the recent yfinance-reachable period. That gap
+was closed with `backtest_momentum_ranking.py`: simulates the exact rule printed on
+the chart's own "活用方法" box (top-3 or top-4 sectors by trailing 12-month return,
+equal-weighted, rebalanced monthly) against 10 years of this tool's own data, and
+compares to RSP buy-and-hold.
+
+**Result (10y period, 108 simulated months after the 12-month lookback warmup):**
+
+| Strategy | CAGR | Annualized Vol | Simple Sharpe | Max Drawdown |
+|---|---|---|---|---|
+| RSP buy-and-hold (benchmark) | +11.67% | 16.57% | 0.75 | -26.68% |
+| Top 3, monthly rebalance | +15.31% | 14.92% | 1.03 | -17.97% |
+| Top 4, monthly rebalance | +14.86% | 14.24% | 1.05 | -16.35% |
+
+Both variants beat the benchmark on every axis tested — higher CAGR, lower vol,
+meaningfully smaller max drawdown, better Sharpe. This is the one part of the whole
+Phase B effort where this tool's *own* data confirmed rather than merely cited
+someone else's result. Same caveats as everywhere else in Phase B apply though: no
+transaction costs/slippage/taxes modeled, Sharpe here is a simplified return/vol
+ratio (no risk-free subtraction), and 108 months is still roughly one market cycle —
+don't read this as proof the edge persists in a genuinely different regime, just as
+a real (not just imported) supporting data point for the direction Phase B ended up
+recommending.
+
 ## Planned phases (not yet built — check with the user before assuming these are wanted)
-- **Phase B is functionally closed** (daily + weekly RRG tuning, RankAccel filtering,
-  and external research all converged on the same "keep RRG as a visualization, lean
-  on plain momentum for anything evidence-based" conclusion above) — further parameter
-  search inside the RRG framework would mostly be curve-fitting to one historical
-  sample, not a good use of effort without a genuinely different idea.
+- **Phase B is now fully closed**, including the momentum-ranking self-check above —
+  daily + weekly RRG tuning, RankAccel filtering, external research, and the
+  momentum-ranking backtest on this tool's own universe all converged on the same
+  "keep RRG as a visualization, lean on the momentum ranking for anything
+  evidence-based" conclusion. Further parameter search inside the RRG framework
+  would mostly be curve-fitting to one historical sample, not a good use of effort
+  without a genuinely different idea.
 - **Phase C**: `generate_dashboard.py`-equivalent (banner + both charts combined) +
   `publish_latest.py` + `run_pipeline.py` + `.github/workflows/publish-rrg.yml`,
   mirroring `Sector_Rotation`'s CI/Pages/manifest shape exactly (same `_[0-9]*.png`
