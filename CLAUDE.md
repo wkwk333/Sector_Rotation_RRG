@@ -266,11 +266,39 @@ Both variants beat the benchmark on every axis tested — higher CAGR, lower vol
 meaningfully smaller max drawdown, better Sharpe. This is the one part of the whole
 Phase B effort where this tool's *own* data confirmed rather than merely cited
 someone else's result. Same caveats as everywhere else in Phase B apply though: no
-transaction costs/slippage/taxes modeled, Sharpe here is a simplified return/vol
-ratio (no risk-free subtraction), and 108 months is still roughly one market cycle —
-don't read this as proof the edge persists in a genuinely different regime, just as
-a real (not just imported) supporting data point for the direction Phase B ended up
-recommending.
+transaction costs/slippage modeled, Sharpe here is a simplified return/vol ratio (no
+risk-free subtraction), and 108 months is still roughly one market cycle — don't read
+this as proof the edge persists in a genuinely different regime, just as a real (not
+just imported) supporting data point for the direction Phase B ended up recommending.
+
+**Japan capital-gains-tax follow-up**: the pre-tax numbers above ignore that monthly
+rebalancing repeatedly *realizes* gains (taxed immediately, 20.315% for a Japanese
+retail investor in a taxable account, no NISA/loss-carryforward modeled), while
+RSP buy-and-hold defers all tax to one final sale — a real, non-trivial difference in
+compounding base over time, not just a flat haircut. `backtest_momentum_ranking.py`
+models two scenarios: `apply_monthly_tax()` (conservative — assumes 100% portfolio
+turnover every month, i.e. even continuing top-N members get fully sold and rebought
+to reset to equal weight, matching what `simulate_top_n()`'s "recompute equal-weight
+every month" pre-tax model implicitly assumes) and
+`simulate_top_n_minimal_turnover_after_tax()` (realistic — only sells tickers that
+actually drop out of the top-N that month, tracks per-ticker cost basis, continuing
+positions stay unsold/untaxed/unrebalanced).
+
+| Strategy | Pre-tax CAGR | After-tax (conservative: full monthly turnover) | After-tax (realistic: only sell what's replaced) |
+|---|---|---|---|
+| RSP buy-and-hold | +11.67% | +10.05% (taxed once, at the end) | same |
+| Top 3, monthly | +15.30% | +9.06% | **+11.44%** |
+| Top 4, monthly | +14.86% | +8.80% | **+10.85%** |
+
+**Under the conservative (100%-turnover) tax assumption, RSP buy-and-hold actually
+wins after tax** — the pre-tax edge is more than erased by the repeated-realization
+tax drag. **Under the realistic (minimal-turnover) tax assumption, the momentum
+ranking still wins after tax, but the margin shrinks a lot**: from a ~3.2-3.6pp
+pre-tax edge down to a ~0.8-1.4pp after-tax edge. Practical takeaway to keep in any
+future user-facing text about this: the edge is real but thin after Japanese capital
+gains tax, and *how much you actually trade* (not just which sectors you pick)
+materially affects whether the strategy is worth it over simple buy-and-hold — don't
+present the pre-tax backtest numbers on their own without this caveat.
 
 ## Planned phases (not yet built — check with the user before assuming these are wanted)
 - **Phase B is now fully closed**, including the momentum-ranking self-check above —
