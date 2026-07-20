@@ -264,61 +264,81 @@ def draw_situation_banner(ax, wrapped_lines: list, last_date: str):
             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F7F7F7", edgecolor="#DDDDDD"))
 
 
+def render_chart(df: pd.DataFrame, tail_days: int, stamp: str, filename: str, is_sub: bool = False) -> str:
+    """
+    指定した尾の長さ(tail_days)でRRGチャートを1枚描画・保存する。
+    メイン(10営業日)とサブ(20営業日、必要なときだけ見る参考用)の両方が
+    この関数を呼ぶ — 描画ロジックは1本化し、尾の長さと保存先だけを変える。
+    """
+    summary, last_date_ts = compute_latest_summary(df)
+    last_date = last_date_ts.strftime("%Y-%m-%d")
+    situation_text = generate_situation_summary(summary)
+    wrapped_lines = wrap_situation_text(situation_text)
+
+    # バナー(現状の要約)の高さは、行数に応じて動的に決める。
+    # 固定比率だとテキスト量が多い日(例: 1つの象限に大半のセクターが
+    # 集中した日)に文字がボックスからはみ出し、下のグラフタイトルと
+    # 重なってしまうため。
+    main_height_in = 7.6
+    header_in = 0.45
+    line_height_in = 9.2 * 1.6 / 72
+    banner_pad_in = 0.55
+    banner_height_in = header_in + len(wrapped_lines) * line_height_in + banner_pad_in
+    fig_height_in = banner_height_in + main_height_in
+
+    fig, (ax_banner, ax) = plt.subplots(
+        2, 1, figsize=(10, fig_height_in),
+        gridspec_kw={"height_ratios": [banner_height_in, main_height_in]},
+    )
+    title = "セクター・ローテーション早期兆候検知 (RRG)"
+    if is_sub:
+        title += f" [参考: 直近{tail_days}営業日版]"
+    fig.suptitle(title, fontsize=15, x=0.0, ha="left", weight="bold")
+    draw_situation_banner(ax_banner, wrapped_lines, last_date)
+    draw_rrg_scatter(ax, df, tail_days)
+    draw_group_legend(ax)
+    draw_ticker_glossary(ax)
+
+    subtitle = f"直近{tail_days}営業日の軌跡。左上(Improving)ほど早期ローテーション候補。"
+    if is_sub:
+        subtitle += " (参考用サブ表示。通常はメインの10営業日版を見てください)"
+    ax.set_title(subtitle, fontsize=12, loc="left", pad=12)
+    fig.text(
+        0.0, -0.015,
+        "X軸 RS-Ratio: RSP比の63日移動平均に対する「今の強さ」(100が基準、右ほど強い) / "
+        "Y軸 RS-Momentum: その強さが5営業日前から「加速しているか」(100が基準、上ほど加速中)",
+        fontsize=8.3, color="#555555",
+    )
+    fig.text(
+        0.0, -0.035,
+        "※ JdK RS-Ratio/RS-Momentumの考え方に基づく自己流の近似実装です(公開されていない正確な係数の再現ではありません)。"
+        "ベンチマークはRSP(等ウェイトS&P500)。",
+        fontsize=8, color="#777777",
+    )
+
+    save_path = os.path.join(OUTPUT_DIR, filename)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return save_path
+
+
 def main():
     try:
         df = load_rrg_data()
-        summary, last_date_ts = compute_latest_summary(df)
-        last_date = last_date_ts.strftime("%Y-%m-%d")
-        situation_text = generate_situation_summary(summary)
-        wrapped_lines = wrap_situation_text(situation_text)
-
-        # バナー(現状の要約)の高さは、行数に応じて動的に決める。
-        # 固定比率だとテキスト量が多い日(例: 1つの象限に大半のセクターが
-        # 集中した日)に文字がボックスからはみ出し、下のグラフタイトルと
-        # 重なってしまうため。
-        main_height_in = 7.6
-        header_in = 0.45
-        line_height_in = 9.2 * 1.6 / 72
-        banner_pad_in = 0.55
-        banner_height_in = header_in + len(wrapped_lines) * line_height_in + banner_pad_in
-        fig_height_in = banner_height_in + main_height_in
-
-        fig, (ax_banner, ax) = plt.subplots(
-            2, 1, figsize=(10, fig_height_in),
-            gridspec_kw={"height_ratios": [banner_height_in, main_height_in]},
-        )
-        fig.suptitle("セクター・ローテーション早期兆候検知 (RRG)", fontsize=15,
-                     x=0.0, ha="left", weight="bold")
-        draw_situation_banner(ax_banner, wrapped_lines, last_date)
-        draw_rrg_scatter(ax, df, CONFIG["tail_days"])
-        draw_group_legend(ax)
-        draw_ticker_glossary(ax)
-
-        ax.set_title(
-            f"直近{CONFIG['tail_days']}営業日の軌跡。左上(Improving)ほど早期ローテーション候補。",
-            fontsize=12, loc="left", pad=12,
-        )
-        fig.text(
-            0.0, -0.015,
-            "X軸 RS-Ratio: RSP比の63日移動平均に対する「今の強さ」(100が基準、右ほど強い) / "
-            "Y軸 RS-Momentum: その強さが5営業日前から「加速しているか」(100が基準、上ほど加速中)",
-            fontsize=8.3, color="#555555",
-        )
-        fig.text(
-            0.0, -0.035,
-            "※ JdK RS-Ratio/RS-Momentumの考え方に基づく自己流の近似実装です(公開されていない正確な係数の再現ではありません)。"
-            "ベンチマークはRSP(等ウェイトS&P500)。",
-            fontsize=8, color="#777777",
-        )
-
         stamp = os.path.basename(find_latest_csv(
             os.path.join(OUTPUT_DIR, "rrg_data_[0-9]*.csv")
         )).replace("rrg_data_", "").replace(".csv", "")
-        save_path = os.path.join(OUTPUT_DIR, f"rrg_chart_{stamp}.png")
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
 
-        print(f"[完了] RRGチャートを保存しました: {save_path}")
+        main_path = render_chart(
+            df, CONFIG["tail_days"], stamp, f"rrg_chart_{stamp}.png", is_sub=False,
+        )
+        print(f"[完了] RRGチャート(メイン, {CONFIG['tail_days']}営業日)を保存しました: {main_path}")
+
+        sub_days = CONFIG["tail_days_sub"]
+        sub_path = render_chart(
+            df, sub_days, stamp, f"rrg_chart_sub{sub_days}d_{stamp}.png", is_sub=True,
+        )
+        print(f"[完了] RRGチャート(サブ, {sub_days}営業日)を保存しました: {sub_path}")
 
     except Exception as e:
         print(f"[エラー] {e}")
