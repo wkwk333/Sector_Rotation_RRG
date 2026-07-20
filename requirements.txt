@@ -5,3 +5,4 @@ matplotlib==3.11.1
 curl_cffi==0.15.0
 adjustText==1.4.0
 scipy==1.17.1
+Pillow==12.3.0

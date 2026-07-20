@@ -23,8 +23,15 @@ quadrant** — that's the whole point of Phase B's finding.
 
 This is a deliberate sibling/successor to `Sector_Rotation` (same machine, directory
 `../Sector_Rotation`), not a fork of it — see "Why a separate repo" below. Currently
-**Phase A+B**: a PC-run pipeline that produces an RRG chart and a momentum-ranking
-chart. No CI, no publishing, no mobile app yet (see "Planned phases" below).
+**Phase A+B+C**: a PC-run pipeline (RRG chart + momentum-ranking chart + a combined
+dashboard image) plus a CI/Pages publishing setup with a browsable archive of past
+days (see "Phase C" below). **As of the Phase C code landing, the repo had not yet
+been pushed to a GitHub remote** — it was built and tested entirely locally first,
+deliberately, since turning on GitHub Actions + Pages means creating a public repo
+and needs explicit user go-ahead (see "Phase C: publishing and archive" below for
+what's still pending at that point). If you're reading this later and `git remote -v`
+shows a real remote, that step has since happened — update this note if so, don't
+leave it stale. Phase D (mobile app) is still not started.
 
 All user-facing text (CLI output, chart labels, docs) is in Japanese.
 
@@ -39,6 +46,11 @@ py -3.11 -m venv venv
 .\venv\Scripts\python.exe plot_momentum_ranking.py   # 2b. render the 12-month momentum leaderboard -> output/momentum_ranking_chart_*.png
 .\venv\Scripts\python.exe backtest_rrg.py               # optional: re-run RRG's informal backtest (daily + weekly variants, ~5 min, hits network for 8y of data)
 .\venv\Scripts\python.exe backtest_momentum_ranking.py  # optional: simulate the top-N/monthly-rebalance rule -> output/momentum_backtest_results_*.csv
+
+# or run the daily publish pipeline in one go (this is what CI runs too):
+.\venv\Scripts\python.exe run_pipeline.py         # steps 1-2b above, in one process -> output/*
+.\venv\Scripts\python.exe generate_dashboard.py   # composite RRG chart + momentum chart -> output/dashboard_*.png
+.\venv\Scripts\python.exe publish_latest.py       # -> public/latest_*.png + public/latest.json, and archive/YYYY-MM-DD/ (see "Phase C" below)
 ```
 
 No test suite, no lint command.
@@ -308,14 +320,85 @@ present the pre-tax backtest numbers on their own without this caveat.
   evidence-based" conclusion. Further parameter search inside the RRG framework
   would mostly be curve-fitting to one historical sample, not a good use of effort
   without a genuinely different idea.
-- **Phase C**: `generate_dashboard.py`-equivalent (banner + both charts combined) +
-  `publish_latest.py` + `run_pipeline.py` + `.github/workflows/publish-rrg.yml`,
-  mirroring `Sector_Rotation`'s CI/Pages/manifest shape exactly (same `_[0-9]*.png`
-  glob-collision fix, same Noto-CJK-font CI step, same dual desktop/mobile PNG
-  convention). Also a good point to reconsider the yfinance→Tiingo data-source
-  research finding if reliability issues show up in CI (Tiingo has an official
-  documented API and comfortable free-tier limits for this tool's ~13-ticker/day
-  need; yfinance would stay as a fallback, not be fully dropped).
+- **Phase C code is built and locally tested; publishing (remote push, Pages, CI)
+  was deliberately left for explicit user go-ahead** — see "Phase C: publishing and
+  archive" below for the architecture and what specifically remains.
 - **Phase D**: extend the *existing* `SectorRotationAndroid` app (new tab + second
   manifest fetch) rather than building a new app — the existing manifest-driven
   Coil/OkHttp/kotlinx.serialization plumbing is generic enough to reuse as-is.
+
+## Phase C: publishing and archive
+
+Unlike `Sector_Rotation`'s Pages setup (which only ever shows the single latest
+dashboard — old runs are simply overwritten), this repo's Phase C explicitly adds a
+**browsable history of past days**, per user request. That's the one meaningful
+divergence from mirroring `Sector_Rotation`'s CI/Pages shape 1:1 — everything else
+(cron schedule shape, Noto-CJK-font CI step, `_[0-9]*.png` digit-anchored globs,
+`workflow_dispatch` + weekday cron trigger) follows the sibling repo's
+already-battle-tested pattern directly.
+
+### New scripts
+- **`generate_dashboard.py`**: does *not* build a new matplotlib figure. It PIL-composites
+  the already-rendered `rrg_chart_*.png` and `momentum_ranking_chart_*.png` into one
+  vertically-stacked `dashboard_*.png`, resizing both to a common width first (they're
+  naturally different widths — the RRG chart and the momentum bar chart have
+  unrelated content, so equal widths were never guaranteed). This deliberately reuses
+  each chart's own already-verified layout (banner, legend, wrapping) rather than
+  risking new layout bugs by re-deriving a combined figure from scratch. `load_jp_font()`
+  hunts the same font-name candidates matplotlib uses so the PIL-drawn banner title
+  doesn't tofu-box on `ubuntu-latest` (falls back to Pillow's non-CJK default font
+  silently if none are found, rather than crashing — acceptable since it's just the
+  banner headline, not the charts themselves, that would be affected).
+- **`run_pipeline.py`**: `rrg_monitor` → `plot_rrg` → `plot_momentum_ranking` in one
+  process, mirroring `Sector_Rotation/run_pipeline.py`'s structure exactly (same
+  `SystemExit`-code-checking loop). Does **not** include `generate_dashboard.py` or
+  `publish_latest.py` as pipeline steps — those come after, as separate CI steps —
+  and does **not** include either `backtest_*.py` script (those are occasional manual
+  checks with multi-minute network calls, not part of the daily run).
+- **`publish_latest.py`**: writes the usual `public/latest_*.png` + `public/latest.json`
+  (same shape as `Sector_Rotation`'s), *plus* archiving logic — see below.
+
+### Archive design (the reason Phase C's publish step differs from the sibling repo)
+`Sector_Rotation`'s Pages deploy (`actions/upload-pages-artifact` + `deploy-pages`)
+**replaces the entire site on every run** — there is no way to accumulate history
+purely on the Pages side. To keep a browsable past, the history has to live somewhere
+that persists *between* CI runs on its own: the git repository itself.
+
+- **`archive/YYYY-MM-DD/`** is a normal tracked directory in this repo (deliberately
+  *not* gitignored — see the comment in `.gitignore` warning against adding it).
+  Each day, `add_to_archive()` copies that day's dated output files into it under
+  fixed names (`rrg_chart.png`, `dashboard.png`, `rrg_data.csv`, etc.).
+- **Retention policy** (`apply_retention_policy()`, user-specified): the most recent
+  `FULL_RETENTION_DAYS` (180) are kept as one folder per day. Older than that, entries
+  are thinned to **one per calendar month** (the last date recorded that month) —
+  older groups are found via `(reference_date - d).days > 180`, grouped by
+  `(year, month)`, and every date in a group except the max is `shutil.rmtree`'d. This
+  runs on *every* `publish_latest.py` call, so thinning happens gradually as dates
+  age past the 180-day line, not as a one-time migration.
+- **`build_archive_index()`** regenerates `archive/index.html` (plain links, no JS)
+  from whatever date folders currently exist — always a fresh reflection of on-disk
+  state, not an incrementally-maintained list, so it can't drift out of sync.
+- **`copy_archive_into_public()`** copies the (now-updated) `archive/` into
+  `public/archive/` as the last publish step, so the *single* Pages artifact built
+  from `public/` each run contains both the latest files and the full archive.
+  `public/` itself stays gitignored/ephemeral as before — only `archive/` (the
+  git-tracked source of truth) needs to survive between runs.
+- **The CI workflow commits `archive/` back to the repo** (`git add archive/ && git
+  commit && git push`, using the default `GITHUB_TOKEN` with `contents: write` — no
+  extra secrets needed) *before* the Pages artifact upload step, so each day's commit
+  is what the next run's `actions/checkout` will see. This is the one meaningful
+  structural difference from `Sector_Rotation`'s workflow (`permissions: contents:
+  read` there vs. `contents: write` here).
+
+### What was intentionally deferred, and why
+- **Not yet pushed to a GitHub remote.** Creating a new public repo (GitHub Pages on
+  the Free plan requires public, same constraint hit in `Sector_Rotation`) and
+  pushing code is a real, externally-visible, hard-to-fully-reverse action — it was
+  built and fully tested locally first (`run_pipeline.py` → `generate_dashboard.py` →
+  `publish_latest.py`, including a synthetic-old-dates test of the retention/thinning
+  logic before reverting the test data) specifically so that step could be a single,
+  reviewable go/no-go decision rather than something silently bundled into "build
+  Phase C."
+- **Tiingo migration** (flagged as a good Phase C moment in the Phase B web research)
+  was not done — `yfinance` is still the only data source. Revisit only if CI actually
+  hits reliability problems; don't switch preemptively without a concrete failure.

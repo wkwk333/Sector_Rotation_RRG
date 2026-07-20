@@ -13,8 +13,11 @@ __pycache__/
 # 実行結果 (日次CSV・チャート画像。再実行すればいつでも再生成できる)
 output/
 
-# GitHub Pages公開用ファイル (将来のPhase C用)
+# GitHub Pages公開用ファイル (デプロイのたびに使い捨てで再生成する)
 public/
+# 注意: archive/ はここに追加しないこと。過去のダッシュボードを
+# GitHub Pagesで閲覧できるようにするため、意図的にコミット対象にしている
+# (publish_latest.pyが日々ここに追記し、保持ポリシーで間引く)。
 
 # Claude Codeのローカル設定 (マシン固有、コミット不要)
 .claude/
