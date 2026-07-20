@@ -28,14 +28,16 @@ import console_utf8  # noqa: F401  (文字化け対策。最初にimportする)
 import glob
 import os
 import sys
+import unicodedata
 
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+from adjustText import adjust_text
 
-from rrg_monitor import CONFIG
+from rrg_monitor import CONFIG, compute_latest_summary, generate_situation_summary
 
 OUTPUT_DIR = CONFIG["output_dir"]
 
@@ -113,19 +115,29 @@ def draw_rrg_scatter(ax, df: pd.DataFrame, tail_days: int):
             "[エラー発生源: draw_rrg_scatter] RS-Ratio/RS-Momentumが計算できたデータがありません。"
         )
 
-    # 軸範囲: 全銘柄・全期間の実データ + 余白から決める (100を中心にできるだけ対称に)
-    max_dev = max(
-        (valid["RS_Ratio"] - 100).abs().max(),
-        (valid["RS_Momentum"] - 100).abs().max(),
-    )
-    max_dev = max(max_dev * 1.25, 3.0)  # 最低限の余白を確保
-    xlim = (100 - max_dev, 100 + max_dev)
-    ylim = (100 - max_dev, 100 + max_dev)
+    # 実際にプロットする範囲(直近tail_days日分)のみを先に切り出す。
+    # 軸範囲もこの部分集合から決める — 半年以上前の極値まで含めた全履歴基準で
+    # 余白を取ると、実際に描画される直近の軌跡に対して枠が大きくなりすぎ、
+    # 上下左右が間延びして見える。
+    tails = {
+        symbol: sec_df.sort_values("Date").tail(tail_days)
+        for symbol, sec_df in valid.groupby("Symbol")
+    }
+    plotted = pd.concat(tails.values())
+
+    # 軸範囲: X(RS-Ratio)とY(RS-Momentum)は値の散らばり幅が異なるため、
+    # 正方形に揃えず個別に余白を決める(片方だけ幅が狭いのに強制的に正方形に
+    # すると、狭い方の軸に大きな空白ができてしまう)。
+    x_dev = max((plotted["RS_Ratio"] - 100).abs().max() * 1.18, 1.2)
+    y_dev = max((plotted["RS_Momentum"] - 100).abs().max() * 1.18, 1.2)
+    xlim = (100 - x_dev, 100 + x_dev)
+    ylim = (100 - y_dev, 100 + y_dev)
 
     draw_quadrant_background(ax, xlim, ylim)
 
-    for symbol, sec_df in valid.groupby("Symbol"):
-        sec_df = sec_df.sort_values("Date").tail(tail_days)
+    texts = []
+    point_xs, point_ys = [], []
+    for symbol, sec_df in tails.items():
         if sec_df.empty:
             continue
         group = sec_df["Group"].iloc[-1]
@@ -144,11 +156,11 @@ def draw_rrg_scatter(ax, df: pd.DataFrame, tail_days: int):
         head = sec_df.iloc[-1]
         ax.scatter(head["RS_Ratio"], head["RS_Momentum"], color=color, s=70,
                    zorder=3, edgecolors="white", linewidths=1.2)
-        ax.annotate(
-            symbol, (head["RS_Ratio"], head["RS_Momentum"]),
-            xytext=(6, 6), textcoords="offset points",
-            fontsize=10, weight="bold", color=color, zorder=4,
-        )
+        txt = ax.text(head["RS_Ratio"], head["RS_Momentum"], symbol,
+                       fontsize=10, weight="bold", color=color, zorder=4)
+        texts.append(txt)
+        point_xs.append(head["RS_Ratio"])
+        point_ys.append(head["RS_Momentum"])
 
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
@@ -156,6 +168,17 @@ def draw_rrg_scatter(ax, df: pd.DataFrame, tail_days: int):
     ax.set_ylabel("RS-Momentum (強さの変化率、100が基準)")
     ax.grid(True, color="#EEEEEE", lw=0.6, zorder=0)
     ax.spines[["top", "right"]].set_visible(False)
+
+    # Improving象限など、複数セクターが接近すると先端ラベルが重なって読めなく
+    # なるため、adjustTextでラベル同士・ラベルと点の重なりを自動回避する。
+    # ラベルが動いた場合は、元の点との対応が分かるよう細い線でつなぐ。
+    if texts:
+        adjust_text(
+            texts, x=point_xs, y=point_ys, ax=ax,
+            expand_points=(1.6, 1.8), expand_text=(1.25, 1.35),
+            force_text=(0.5, 0.7), force_points=(0.3, 0.4),
+            arrowprops=dict(arrowstyle="-", color="#999999", lw=0.7, alpha=0.8, shrinkA=2, shrinkB=4),
+        )
 
 
 def draw_group_legend(ax):
@@ -171,22 +194,118 @@ def draw_group_legend(ax):
     leg.get_frame().set_alpha(0.9)
 
 
+def draw_ticker_glossary(ax, start_y: float = 0.58):
+    """
+    凡例(グループ色)の下に、各ティッカーの略称→正式名称を一覧で追記する。
+    「XLKって何?」を見た瞬間に確認できるようにするための一覧で、識別は
+    引き続き軌跡先端の直接ラベルが主(このリストは補助)。
+    """
+    groups_order = ["growth", "value", "defensive", "rate_sensitive"]
+    by_group = {g: [] for g in groups_order}
+    for sec in CONFIG["sectors"]:
+        by_group.setdefault(sec["group"], []).append(sec)
+
+    ax.text(1.02, start_y + 0.05, "銘柄一覧 (ティッカー: 正式名称)", transform=ax.transAxes,
+            fontsize=8.3, weight="bold", color="#444444", ha="left", va="top")
+
+    y = start_y
+    line_h = 0.033
+    gap_h = 0.012
+    for g in groups_order:
+        secs = by_group.get(g, [])
+        if not secs:
+            continue
+        color = GROUP_COLORS.get(g, "#888888")
+        ax.text(1.02, y, GROUP_LABELS[g], transform=ax.transAxes, fontsize=8.0,
+                weight="bold", color=color, ha="left", va="top")
+        y -= line_h
+        for sec in secs:
+            ax.text(1.03, y, f"{sec['ticker']}: {sec['label']}", transform=ax.transAxes,
+                    fontsize=7.8, color="#333333", ha="left", va="top")
+            y -= line_h
+        y -= gap_h
+
+
+def _wrap_cjk(text: str, max_width: int) -> list:
+    """
+    全角文字を幅2、半角文字を幅1として数え、max_widthを超える手前で改行する。
+    日本語は単語間にスペースが無いため textwrap.fill だと1行が改行されずに
+    見た目の幅を超えて突き抜ける(全角文字はフォント上、半角の約2倍幅がある
+    ため文字数だけでは折り返し判定できない) — その対策として自前で実装する。
+    """
+    lines, cur, cur_w = [], "", 0
+    for ch in text:
+        w = 2 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 1
+        if cur and cur_w + w > max_width:
+            lines.append(cur)
+            cur, cur_w = "", 0
+        cur += ch
+        cur_w += w
+    lines.append(cur)
+    return lines
+
+
+def wrap_situation_text(situation_text: str, max_width: int = 148) -> list:
+    """状況説明テキストを行ごとに折り返し、表示用の行リストを返す。"""
+    out = []
+    for line in situation_text.split("\n"):
+        out.extend(_wrap_cjk(line, max_width))
+    return out
+
+
+def draw_situation_banner(ax, wrapped_lines: list, last_date: str):
+    """データから読み取れる現状を、平易な日本語の短文としてチャート上部に表示する。"""
+    ax.axis("off")
+    ax.text(0.0, 1.0, f"■ 現状の要約 (データ基準日: {last_date})", transform=ax.transAxes,
+            fontsize=11.5, weight="bold", va="top", ha="left")
+
+    ax.text(0.0, 0.80, "\n".join(wrapped_lines), transform=ax.transAxes, fontsize=9.2,
+            va="top", ha="left", linespacing=1.6, color="#222222",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="#F7F7F7", edgecolor="#DDDDDD"))
+
+
 def main():
     try:
         df = load_rrg_data()
-        last_date = df["Date"].max().strftime("%Y-%m-%d")
+        summary, last_date_ts = compute_latest_summary(df)
+        last_date = last_date_ts.strftime("%Y-%m-%d")
+        situation_text = generate_situation_summary(summary)
+        wrapped_lines = wrap_situation_text(situation_text)
 
-        fig, ax = plt.subplots(figsize=(10, 9))
+        # バナー(現状の要約)の高さは、行数に応じて動的に決める。
+        # 固定比率だとテキスト量が多い日(例: 1つの象限に大半のセクターが
+        # 集中した日)に文字がボックスからはみ出し、下のグラフタイトルと
+        # 重なってしまうため。
+        main_height_in = 7.6
+        header_in = 0.45
+        line_height_in = 9.2 * 1.6 / 72
+        banner_pad_in = 0.55
+        banner_height_in = header_in + len(wrapped_lines) * line_height_in + banner_pad_in
+        fig_height_in = banner_height_in + main_height_in
+
+        fig, (ax_banner, ax) = plt.subplots(
+            2, 1, figsize=(10, fig_height_in),
+            gridspec_kw={"height_ratios": [banner_height_in, main_height_in]},
+        )
+        fig.suptitle("セクター・ローテーション早期兆候検知 (RRG)", fontsize=15,
+                     x=0.0, ha="left", weight="bold")
+        draw_situation_banner(ax_banner, wrapped_lines, last_date)
         draw_rrg_scatter(ax, df, CONFIG["tail_days"])
         draw_group_legend(ax)
+        draw_ticker_glossary(ax)
 
         ax.set_title(
-            f"セクター・ローテーション早期兆候検知 (RRG) — データ基準日: {last_date}\n"
             f"直近{CONFIG['tail_days']}営業日の軌跡。左上(Improving)ほど早期ローテーション候補。",
-            fontsize=13, loc="left", pad=14,
+            fontsize=12, loc="left", pad=12,
         )
         fig.text(
-            0.0, -0.02,
+            0.0, -0.015,
+            "X軸 RS-Ratio: RSP比の63日移動平均に対する「今の強さ」(100が基準、右ほど強い) / "
+            "Y軸 RS-Momentum: その強さが5営業日前から「加速しているか」(100が基準、上ほど加速中)",
+            fontsize=8.3, color="#555555",
+        )
+        fig.text(
+            0.0, -0.035,
             "※ JdK RS-Ratio/RS-Momentumの考え方に基づく自己流の近似実装です(公開されていない正確な係数の再現ではありません)。"
             "ベンチマークはRSP(等ウェイトS&P500)。",
             fontsize=8, color="#777777",

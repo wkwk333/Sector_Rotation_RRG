@@ -81,10 +81,44 @@ repo.
 - **The group-color legend sits outside the axes** (`bbox_to_anchor=(1.02, 1.0)`)
   because all four plot corners are already occupied by quadrant labels — an
   in-plot corner legend (tried first) collided with the Weakening label specifically.
+  `draw_ticker_glossary()` (ticker → full Japanese sector name, grouped under the
+  same 4 macro-group headings/colors as the legend) is stacked directly below it in
+  the same right-side margin, starting at a hardcoded `start_y` — if the legend ever
+  grows (more groups, longer title), re-check that `start_y` still clears it.
 - `draw_quadrant_background()`'s `axvspan(..., ymin=, ymax=)` call mixes coordinate
   systems on purpose: `xmin`/`xmax` are data coordinates, `ymin`/`ymax` are
   axes-fraction (0-1) — this is normal `axvspan` behavior, not a bug, and the
   fraction conversion from data coordinates is done inline in the function.
+- **Axis limits (`draw_rrg_scatter`) are sized from the *plotted* tail only, not the
+  full downloaded history, and X/Y are padded independently rather than forced
+  square.** An earlier version sized the axes off the full ~1-year history's max
+  deviation and used one shared `max_dev` for both axes — since only the last
+  `tail_days` points are ever drawn, that left huge unused margin (framing for
+  extremes from months ago) and wasted space on whichever axis has the smaller
+  natural spread. Don't reintroduce either shortcut; both were explicit fixes for
+  "the chart has too much dead space" feedback.
+- **Sector-ticker labels are placed via `adjust_text` (the `adjustText` package,
+  added as a dependency for this reason alone)**, not a fixed `xytext` offset —
+  with several sectors clustered in the same quadrant (Improving especially), fixed
+  offsets produced overlapping, unreadable labels. `adjust_text` is called once at
+  the end of `draw_rrg_scatter` with all label `Text` objects plus the raw point
+  coordinates (so labels repel both each other and the dots), and draws a thin
+  connector line (`arrowprops`) when a label had to move away from its point. A
+  matplotlib version warning ("transform doesn't support FancyArrowPatch...") prints
+  to console on every run — cosmetic, from `adjustText`'s internal fallback path, not
+  a sign anything is broken; confirmed by inspecting the rendered output.
+- **The situation-summary banner (`draw_situation_banner`) wraps Japanese text with a
+  hand-rolled `_wrap_cjk()`, not `textwrap.fill`.** `textwrap` only breaks on
+  whitespace, and Japanese sentences have none between "words," so a whole clause can
+  come out as one unbreakable token far wider than the intended wrap width (bug seen
+  and fixed). `_wrap_cjk` counts full-width characters as width 2 so wrapping matches
+  visual width, not code-point count. The banner axes' height is computed *from* the
+  resulting line count (`main()`, `banner_height_in = header + lines*line_height + pad`)
+  rather than a fixed guess — text volume is data-dependent (varies with how many
+  sectors land in each quadrant on a given day), and a fixed-height banner will
+  eventually overflow into the chart title below it on some future day even if it
+  looks fine today. If you widen or narrow `wrap_situation_text`'s `max_width`, the
+  banner height adapts automatically — no other change needed.
 
 ### Encoding
 Same `console_utf8.py` fix as the sibling repo (copied verbatim, not imported across

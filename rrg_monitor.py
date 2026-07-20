@@ -21,6 +21,19 @@ acceleration)を算出して日次CSVに出力する。
 XLK等の大型セクター自体が指数の大部分を占め、「自分自身に対する相対強度」に
 近くなってしまう歪みがあるため。
 
+【RS_Ratioが「2段階」であることの補足(誤解しやすいので明記)】
+「セクター単体の63日平均からの乖離」と「RSP単体の63日平均からの乖離」を
+別々に計算して両者を比較しているのではない。そうではなく、
+  (1) まずセクター÷RSPの割り算を1回行い、「セクターとRSPを合成した
+      1本の比率」にしてしまう(=これが「RSPに対して」の意味。市場全体の
+      値動きをこの時点で相殺し、セクター側の超過/劣後分だけを残す)
+  (2) その合成済み1本の比率(RS_smooth)について、直近63日間の"その比率
+      自身の平均・標準偏差"と比べて今日が高いか低いかをz-score化する
+      (=セクターとRSP、2つの独立した「自分の平均」を比較しているのでは
+      なく、既に1本化された比率の自分史上の位置を見ているだけ)
+先に割り算(1)で市場全体の動きを消してから、その残差の変化(2)を見る、
+という順序が本質。
+
 これはJdKの公開されていない正確な係数の再現ではなく、同じ考え方に基づく
 自己流の近似実装であることに留意(ウィンドウ幅等はPhase Bで実データを見ながら
 調整する前提)。
@@ -257,17 +270,12 @@ def compute_rrg(close: pd.DataFrame) -> pd.DataFrame:
     return long_df
 
 
-def save_outputs(long_df: pd.DataFrame, out_dir: str):
-    os.makedirs(out_dir, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d")
-
-    data_path = os.path.join(out_dir, f"rrg_data_{stamp}.csv")
-    long_df.to_csv(data_path, encoding="utf-8-sig", index=False)
-
+def compute_latest_summary(long_df: pd.DataFrame):
+    """long形式データから直近日だけを抜き出し、RankAccel降順のサマリーを返す。"""
     valid = long_df.dropna(subset=["RS_Ratio", "RS_Momentum"])
     if valid.empty:
         raise ValueError(
-            "[エラー発生源: save_outputs] RS-Ratio/RS-Momentumが計算できた行がありません。"
+            "[エラー発生源: compute_latest_summary] RS-Ratio/RS-Momentumが計算できた行がありません。"
             " 取得期間(period)がウィンドウ幅(window)に対して短すぎる可能性があります。"
         )
     last_date = valid["Date"].max()
@@ -277,6 +285,59 @@ def save_outputs(long_df: pd.DataFrame, out_dir: str):
         "Symbol", "Label", "Group", "Quadrant", "RS_Ratio", "RS_Momentum",
         "Rank", "RankVelocity", "RankAccel",
     ]]
+    return summary, last_date
+
+
+def generate_situation_summary(summary: pd.DataFrame) -> str:
+    """
+    直近日のサマリーから、現在の状況を平易な日本語で説明する短文を生成する。
+    象限(Leading/Improving/Weakening/Lagging)ごとにセクターを振り分け、
+    Improving象限は順位加速度(RankAccel)が大きい順に並べて「早期候補の中でも
+    どこが特に加速しているか」が分かるようにする。
+    """
+    def fmt(tickers):
+        return "、".join(
+            f"{t}({summary.set_index('Symbol').loc[t, 'Label']})" for t in tickers
+        )
+
+    by_quadrant = {q: [] for q in ("Leading", "Improving", "Weakening", "Lagging")}
+    for _, row in summary.iterrows():
+        if row["Quadrant"] in by_quadrant:
+            by_quadrant[row["Quadrant"]].append(row)
+
+    # Improving はRankAccel(既にsummary全体でRankAccel降順)の順のまま使う
+    improving_syms = [r["Symbol"] for r in by_quadrant["Improving"]]
+    leading_syms = [r["Symbol"] for r in by_quadrant["Leading"]]
+    weakening_syms = [r["Symbol"] for r in by_quadrant["Weakening"]]
+    lagging_syms = [r["Symbol"] for r in by_quadrant["Lagging"]]
+
+    lines = []
+    if improving_syms:
+        top = improving_syms[0]
+        top_label = summary.set_index("Symbol").loc[top, "Label"]
+        lines.append(
+            f"★早期ローテーション候補(Improving): {fmt(improving_syms)}。"
+            f"中でも{top}({top_label})が順位の加速度(RankAccel)が最大で、最も勢いの変化が急。"
+        )
+    if leading_syms:
+        lines.append(f"◆現在の主役(Leading): {fmt(leading_syms)}。既に強く、勢いも続いている。")
+    if weakening_syms:
+        lines.append(f"▽勢い鈍化(Weakening): {fmt(weakening_syms)}。強いが失速し始めており、利益確定を検討する局面。")
+    if lagging_syms:
+        lines.append(f"・様子見(Lagging): {fmt(lagging_syms)}。弱く、まだ転換の兆しなし。")
+    if not lines:
+        lines.append("十分なデータがないため、状況を判定できません。")
+    return "\n".join(lines)
+
+
+def save_outputs(long_df: pd.DataFrame, out_dir: str):
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d")
+
+    data_path = os.path.join(out_dir, f"rrg_data_{stamp}.csv")
+    long_df.to_csv(data_path, encoding="utf-8-sig", index=False)
+
+    summary, last_date = compute_latest_summary(long_df)
     summary_path = os.path.join(out_dir, f"rrg_summary_{stamp}.csv")
     summary.to_csv(summary_path, encoding="utf-8-sig", index=False)
 
@@ -304,6 +365,9 @@ def main():
         print(f"[完了] サマリー  : {summary_path}")
         print(f"\n直近データ日: {last_date.strftime('%Y-%m-%d') if hasattr(last_date, 'strftime') else last_date}")
         print(summary.to_string(index=False))
+
+        print("\n[現状の要約]")
+        print(generate_situation_summary(summary))
 
         print("\n[次のステップ] plot_rrg.py を実行すると、彗星チャートを作成できます。")
 
