@@ -11,10 +11,17 @@ Relative Rotation Graph (RRG) の彗星(コメット)チャートを描画する
     右上 Leading    : 強く、さらに強まっている (既に人気化した本命)
     右下 Weakening  : 強いが、勢いが鈍り始めた (利益確定を検討する局面)
     左下 Lagging    : 弱く、さらに弱まっている (様子見)
-    左上 Improving  : まだ弱いが、勢いは好転し始めた ★早期ローテーション候補★
+    左上 Improving  : まだ弱いが、勢いは好転し始めた (参考情報。下記の注記を参照)
 各セクターの直近10営業日分の軌跡を尾として描き、新しいほど不透明にする。
 色は個別銘柄の識別ではなく、4つのマクロ・グループを示す副次情報。
 銘柄そのものの識別は軌跡の先端に付けたティッカーラベルで行う。
+
+【重要】backtest_rrg.py での簡易バックテストでは、Improving象限入りと
+その後の相対リターン改善に一貫した関係を確認できなかった(CLAUDE.md参照)。
+このためチャート上でも「早期ローテーション候補」と断定する表現・★マークは
+使わず、「参考情報」として中立的に表示している。学術的な裏付けのある
+セクター選びには plot_momentum_ranking.py (12ヶ月モメンタムランキング) を
+あわせて参照すること。
 
 実行方法(先に rrg_monitor.py を実行しておくこと):
     python plot_rrg.py
@@ -37,7 +44,9 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from adjustText import adjust_text
 
-from rrg_monitor import CONFIG, compute_latest_summary, generate_situation_summary
+from rrg_monitor import (
+    CONFIG, GROUP_COLORS, GROUP_LABELS, compute_latest_summary, generate_situation_summary,
+)
 
 OUTPUT_DIR = CONFIG["output_dir"]
 
@@ -50,19 +59,8 @@ for _name in _JP_FONT_CANDIDATES:
         break
 plt.rcParams["axes.unicode_minus"] = False
 
-# --- 配色: 4つのマクロ・グループ (色覚多様性を考慮し、識別は直接ラベルが主) ---
-GROUP_COLORS = {
-    "growth": "#2E5EAA",          # 景気敏感/グロース: 青
-    "value": "#2E8B4F",           # バリュー/資本財: 緑
-    "defensive": "#C9902A",       # ディフェンシブ: 琥珀
-    "rate_sensitive": "#7B4FA3",  # 金利敏感/その他: 紫
-}
-GROUP_LABELS = {
-    "growth": "景気敏感/グロース",
-    "value": "バリュー/資本財",
-    "defensive": "ディフェンシブ",
-    "rate_sensitive": "金利敏感/その他",
-}
+# GROUP_COLORS/GROUP_LABELS(4マクログループの配色・ラベル)は rrg_monitor.py
+# 側で定義 — plot_momentum_ranking.py も同じ配色を使うため、データ側に集約。
 QUADRANT_TINT = "#666666"  # 象限背景は状態色ではなく、位置を示すだけの淡いグレー
 
 
@@ -91,7 +89,7 @@ def draw_quadrant_background(ax, xlim, ylim):
         ((100, x1), (100, y1), 0.10, "Leading\n(強・加速)", (x1, y1)),
         ((100, x1), (y0, 100), 0.03, "Weakening\n(強・減速)", (x1, y0)),
         ((x0, 100), (y0, 100), 0.06, "Lagging\n(弱・減速)", (x0, y0)),
-        ((x0, 100), (100, y1), 0.14, "Improving ★\n(弱→加速中)", (x0, y1)),
+        ((x0, 100), (100, y1), 0.08, "Improving\n(弱→加速中、参考)", (x0, y1)),
     ]
     for (xr, yr, alpha, label, (lx, ly)) in quadrants:
         ax.axvspan(xr[0], xr[1], ymin=(yr[0] - y0) / (y1 - y0), ymax=(yr[1] - y0) / (y1 - y0),
@@ -299,7 +297,7 @@ def render_chart(df: pd.DataFrame, tail_days: int, stamp: str, filename: str, is
     draw_group_legend(ax)
     draw_ticker_glossary(ax)
 
-    subtitle = f"直近{tail_days}営業日の軌跡。左上(Improving)ほど早期ローテーション候補。"
+    subtitle = f"直近{tail_days}営業日の軌跡。左上(Improving)は勢いが好転し始めた局面(統計的な優位性は未確認)。"
     if is_sub:
         subtitle += " (参考用サブ表示。通常はメインの10営業日版を見てください)"
     ax.set_title(subtitle, fontsize=12, loc="left", pad=12)
