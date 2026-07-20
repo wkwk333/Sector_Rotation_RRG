@@ -23,15 +23,12 @@ quadrant** — that's the whole point of Phase B's finding.
 
 This is a deliberate sibling/successor to `Sector_Rotation` (same machine, directory
 `../Sector_Rotation`), not a fork of it — see "Why a separate repo" below. Currently
-**Phase A+B+C**: a PC-run pipeline (RRG chart + momentum-ranking chart + a combined
-dashboard image) plus a CI/Pages publishing setup with a browsable archive of past
-days (see "Phase C" below). **As of the Phase C code landing, the repo had not yet
-been pushed to a GitHub remote** — it was built and tested entirely locally first,
-deliberately, since turning on GitHub Actions + Pages means creating a public repo
-and needs explicit user go-ahead (see "Phase C: publishing and archive" below for
-what's still pending at that point). If you're reading this later and `git remote -v`
-shows a real remote, that step has since happened — update this note if so, don't
-leave it stale. Phase D (mobile app) is still not started.
+**Phase A+B+C, live**: a PC-run pipeline (RRG chart + momentum-ranking chart + a
+combined dashboard image) plus a working CI/Pages publishing setup with a browsable
+archive of past days (see "Phase C" below). Public repo:
+`https://github.com/wkwk333/Sector_Rotation_RRG`, Pages site:
+`https://wkwk333.github.io/Sector_Rotation_RRG/`. Phase D (mobile app) is still not
+started.
 
 All user-facing text (CLI output, chart labels, docs) is in Japanese.
 
@@ -390,15 +387,40 @@ that persists *between* CI runs on its own: the git repository itself.
   structural difference from `Sector_Rotation`'s workflow (`permissions: contents:
   read` there vs. `contents: write` here).
 
-### What was intentionally deferred, and why
-- **Not yet pushed to a GitHub remote.** Creating a new public repo (GitHub Pages on
-  the Free plan requires public, same constraint hit in `Sector_Rotation`) and
-  pushing code is a real, externally-visible, hard-to-fully-reverse action — it was
-  built and fully tested locally first (`run_pipeline.py` → `generate_dashboard.py` →
-  `publish_latest.py`, including a synthetic-old-dates test of the retention/thinning
-  logic before reverting the test data) specifically so that step could be a single,
-  reviewable go/no-go decision rather than something silently bundled into "build
-  Phase C."
+### Publishing: done, verified end-to-end
+Before pushing, this repo's commit history was audited for personal info the same
+way `Sector_Rotation`'s was (author identity, grep for real names/emails/local
+Windows paths across all tracked text files) — clean, since this repo's identity was
+set to `user` / the GitHub noreply address from its very first commit (unlike
+`Sector_Rotation`, it never needed a history rewrite). Public repo created via
+`gh repo create --public`, pushed, Pages enabled via
+`gh api repos/.../pages -X POST -f build_type=workflow`. Verified live via
+`gh run watch` on a manual `workflow_dispatch` run, then `curl`-checking
+`latest.json`, `latest_dashboard.png`, `archive/index.html`, and a per-date archive
+file all returned 200 from the deployed Pages site.
+
+**New CI gotcha found (distinct from `Sector_Rotation`'s Japanese-comment bug):** the
+workflow was first committed as `.github/workflows/publish-rrg.yml`. Before pushing,
+an early diagnostic `gh workflow run publish-rrg.yml` was tried against that path
+*before* the file existed on GitHub yet, which 404'd — and after the real file was
+pushed, GitHub never registered it (absent from `gh workflow list`, 404 on dispatch,
+no error banner, same "silently missing" symptom as the Japanese-comment bug, but
+confirmed via `git/trees` that the file *was* present at the correct path on the
+default branch, and via PyYAML that it parsed as valid YAML with a structure
+identical to `Sector_Rotation`'s known-working workflow). Bisected by pushing the
+exact same file content under a different filename (`publish-rrg2.yml`), which
+registered immediately — proving the content was fine and something was cached
+specifically against the string `publish-rrg.yml`. Root cause (best guess, not
+confirmed by GitHub): a negative/404 lookup against that exact path got cached
+server-side and didn't invalidate quickly even after the file started existing.
+**Fix: renamed to `daily-publish.yml`** (a name never probed before it existed) — it
+registered within seconds. **Takeaway for next time: don't probe/dispatch a workflow
+path before its file has actually been pushed and had time to register** — if you
+need to check registration, poll `gh api repos/OWNER/REPO/actions/workflows` (which
+lists what's registered) rather than calling `gh workflow run <path>` against a
+not-yet-existing file, since the latter seems to be what triggers the negative cache.
+
+### What was intentionally deferred
 - **Tiingo migration** (flagged as a good Phase C moment in the Phase B web research)
   was not done — `yfinance` is still the only data source. Revisit only if CI actually
   hits reliability problems; don't switch preemptively without a concrete failure.
