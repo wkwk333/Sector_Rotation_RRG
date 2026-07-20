@@ -104,6 +104,28 @@ def draw_group_legend(ax):
     leg.get_frame().set_alpha(0.9)
 
 
+def draw_usage_note(ax, start_y: float = 0.60):
+    """
+    凡例の下に、検証された具体的な活用手順(月次リバランス)を追記する。
+    Quantpedia「Sector Momentum - Rotational System」等で確認されている、
+    「上位数銘柄を均等保有し、月1回だけ入れ替える」という運用に近い使い方を
+    案内する — 日々・週次で細かく反応することを推奨しない旨とセットで示す。
+    """
+    steps = [
+        "① 月1回程度、このランキングを確認",
+        "② 上位3〜4銘柄を目安に保有を検討",
+        "③ 保有中は基本的に見直さない",
+        "④ 次回確認まで約1ヶ月空ける",
+    ]
+    ax.text(1.02, start_y, "■ 活用方法(検証された運用に近い使い方)", transform=ax.transAxes,
+            fontsize=8.3, weight="bold", color="#444444", ha="left", va="top")
+
+    body = "\n".join(steps) + "\n(日々・週次の細かい変動への追随は非推奨)"
+    ax.text(1.02, start_y - 0.05, body, transform=ax.transAxes, fontsize=8.0,
+            color="#333333", ha="left", va="top", linespacing=1.6,
+            bbox=dict(boxstyle="round,pad=0.45", facecolor="#F7F7F7", edgecolor="#DDDDDD"))
+
+
 def main():
     try:
         df = load_momentum_ranking()
@@ -122,6 +144,7 @@ def main():
 
         draw_momentum_bars(ax, df, lookback_days, benchmark)
         draw_group_legend(ax)
+        draw_usage_note(ax)
 
         fig.text(
             0.02, -0.04,
